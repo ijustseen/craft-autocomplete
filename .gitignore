@@ -1,0 +1,14 @@
+.gradle/
+build/
+run/
+run-forge/
+run-neoforge/
+out/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+__pycache__/
+*.pyc
+*.log
+hs_err_*.log

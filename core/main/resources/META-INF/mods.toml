@@ -1,0 +1,24 @@
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "MIT"
+
+[[mods]]
+modId = "craft_autocomplete"
+version = "${version}"
+displayName = "Craft Autocomplete"
+authors = "ijustseen"
+description = '''Craft Autocomplete.'''
+
+[[dependencies.craft_autocomplete]]
+modId = "forge"
+mandatory = true
+versionRange = "[47,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.craft_autocomplete]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[${minecraft},)"
+ordering = "NONE"
+side = "CLIENT"

@@ -1,0 +1,24 @@
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "craft_autocomplete"
+version = "${version}"
+displayName = "Craft Autocomplete"
+authors = "ijustseen"
+description = '''Craft Autocomplete.'''
+
+[[dependencies.craft_autocomplete]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${neoforge},)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.craft_autocomplete]]
+modId = "minecraft"
+type = "required"
+versionRange = "[${minecraft},)"
+ordering = "NONE"
+side = "CLIENT"

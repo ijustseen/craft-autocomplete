@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Create one Minecraft version directory and fill its dependency properties.
+
+Gradle registers every {loader}/versions/<mc> directory that contains
+gradle.properties. This command writes that directory. It does not edit
+settings.gradle.kts.
+
+Usage:
+  ./add-version fabric 1.21.4
+  ./add-version fabric 1.21.4 --active
+  ./add-version forge 1.21.1
+  ./add-version neoforge 1.21.1 --yarn-patch 1.21+build.6
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+LOADERS = ("fabric", "forge", "neoforge")
+USER_AGENT = "multi-loader-mod-template/add-version"
+
+
+def die(message: str) -> None:
+    print(f"add-version: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def fetch(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        die(f"{url} returned HTTP {error.code}")
+    except urllib.error.URLError as error:
+        die(f"could not reach {url}: {error.reason}")
+
+
+def fetch_json(url: str):
+    return json.loads(fetch(url).decode())
+
+
+def maven_versions(url: str) -> list[str]:
+    root = ET.fromstring(fetch(url))
+    namespace = ""
+    if root.tag.startswith("{"):
+        namespace = root.tag.split("}", 1)[0] + "}"
+    return [
+        element.text.strip()
+        for element in root.findall(f".//{namespace}version")
+        if element.text and element.text.strip()
+    ]
+
+
+def numeric_key(text: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in text.replace("-", ".").split("."):
+        parts.append(int(piece) if piece.isdigit() else -1)
+    return tuple(parts)
+
+
+def java_major(mc: str) -> int:
+    manifest = fetch_json("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+    entry = next((item for item in manifest["versions"] if item["id"] == mc), None)
+    if entry is None:
+        die(f"Minecraft {mc} is not in Mojang's version manifest")
+    meta = fetch_json(entry["url"])
+    try:
+        return int(meta["javaVersion"]["majorVersion"])
+    except (KeyError, TypeError, ValueError):
+        die(f"Mojang's metadata for {mc} has no Java version")
+
+
+def yarn_version(mc: str) -> str:
+    rows = fetch_json(f"https://meta.fabricmc.net/v2/versions/yarn/{urllib.parse.quote(mc)}")
+    if not rows:
+        die(f"Yarn has no mappings for Minecraft {mc}")
+    return rows[0]["version"]
+
+
+def loader_version(mc: str) -> str:
+    rows = fetch_json(f"https://meta.fabricmc.net/v2/versions/loader/{urllib.parse.quote(mc)}")
+    if not rows:
+        die(f"Fabric Loader has no build for Minecraft {mc}")
+    stable = next((row["loader"] for row in rows if row.get("loader", {}).get("stable")), None)
+    return (stable or rows[0]["loader"])["version"]
+
+
+def fabric_api_version(mc: str) -> str:
+    versions = maven_versions(
+        "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/maven-metadata.xml"
+    )
+    suffix = f"+{mc}"
+    matches = [version for version in versions if version.endswith(suffix)]
+    if not matches:
+        die(f"Fabric API has no build for Minecraft {mc}")
+    return max(matches, key=lambda version: numeric_key(version.split("+", 1)[0]))
+
+
+def forge_version(mc: str) -> str:
+    payload = fetch_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
+    promos = payload.get("promos", payload)
+    build = promos.get(f"{mc}-recommended") or promos.get(f"{mc}-latest")
+    if not build:
+        die(f"Forge publishes neither a recommended nor a latest build for Minecraft {mc}")
+    text = str(build)
+    if text.startswith(mc + "-"):
+        return text
+    return f"{mc}-{text}"
+
+
+def neoforge_version(mc: str) -> str:
+    parts = mc.split(".")
+    if parts[0] != "1" or len(parts) < 2:
+        die(f"cannot map Minecraft {mc} onto a NeoForge version line")
+    if len(parts) == 2:
+        parts.append("0")
+    prefix = ".".join(parts[1:3]) + "."
+    versions = maven_versions(
+        "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
+    )
+    matches = [version for version in versions if version.startswith(prefix)]
+    stable = [version for version in matches if "-" not in version]
+    chosen = stable or matches
+    if not chosen:
+        die(f"NeoForge has no build on the {prefix}* line for Minecraft {mc}")
+    return max(chosen, key=numeric_key)
+
+
+def yarn_patch(artifact: str, mc: str, override: str | None) -> str:
+    if override:
+        return override
+    versions = maven_versions(
+        f"https://maven.architectury.dev/dev/architectury/{artifact}/maven-metadata.xml"
+    )
+    parsed: list[tuple[list[str], int, str]] = []
+    for raw in versions:
+        game, separator, build = raw.partition("+build.")
+        if not separator or not build.isdigit():
+            continue
+        parsed.append((game.split("."), int(build), raw))
+    mc_parts = mc.split(".")
+    exact = [item for item in parsed if item[0] == mc_parts]
+    pool = exact
+    if not pool:
+        best = 0
+        prefixed: list[tuple[list[str], int, str]] = []
+        for parts, build, raw in parsed:
+            if len(parts) < len(mc_parts) and mc_parts[: len(parts)] == parts:
+                if len(parts) > best:
+                    best = len(parts)
+                    prefixed = [(parts, build, raw)]
+                elif len(parts) == best:
+                    prefixed.append((parts, build, raw))
+        pool = prefixed
+    if not pool:
+        published = ", ".join(sorted({item[2].split("+", 1)[0] for item in parsed})) or "none"
+        sample = max(parsed, key=lambda item: item[1])[2] if parsed else "<game>+build.<n>"
+        die(
+            "Architectury has no Yarn patch for Minecraft "
+            f"{mc}. Published game versions: {published}. "
+            f"Pass --yarn-patch <version>, for example --yarn-patch {sample}"
+        )
+    return max(pool, key=lambda item: item[1])[2]
+
+
+def mod_group() -> str:
+    properties = ROOT / "gradle.properties"
+    for line in properties.read_text().splitlines():
+        if line.startswith("mod.group="):
+            return line.split("=", 1)[1].strip()
+    die("gradle.properties has no mod.group")
+
+
+def write_properties(path: Path, values: dict[str, str], dry_run: bool) -> None:
+    text = "".join(f"{key}={value}\n" for key, value in values.items())
+    print(path.relative_to(ROOT))
+    print(text, end="" if text.endswith("\n") else "\n")
+    if dry_run:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def copy_entrypoints(loader: str, version_dir: Path, group: str, dry_run: bool) -> None:
+    source_root = ROOT / "templates" / loader / "src" / "client" / "java" / Path(*group.split("."))
+    if not source_root.is_dir():
+        die(f"missing entrypoint templates in templates/{loader} for package {group}")
+    package_path = Path(*group.split("."))
+    for source in sorted(source_root.glob("*.java")):
+        text = source.read_text().replace("package com.example.multiloader;", f"package {group};")
+        destination = version_dir / "src" / "client" / "java" / package_path / source.name
+        print(destination.relative_to(ROOT))
+        if dry_run or destination.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text)
+
+
+def read_active() -> str:
+    file = ROOT / "active-version"
+    if not file.is_file():
+        return ""
+    return file.read_text().strip()
+
+
+def version_directories(loader: str) -> list[str]:
+    directory = ROOT / loader / "versions"
+    if not directory.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.is_dir() and (path / "gradle.properties").is_file()
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Add a Minecraft version by creating {loader}/versions/<mc>/gradle.properties."
+    )
+    parser.add_argument("loader", choices=LOADERS)
+    parser.add_argument("mc", help="Minecraft version, for example 1.21.4")
+    parser.add_argument(
+        "--active",
+        action="store_true",
+        help="Point active-version at this Fabric version so core/ is edited in its Yarn names",
+    )
+    parser.add_argument("--yarn-patch", help="Architectury Yarn patch version, for Forge or NeoForge")
+    parser.add_argument("--dry-run", action="store_true", help="Resolve dependencies and print files without writing")
+    args = parser.parse_args()
+
+    if args.active and args.loader != "fabric":
+        die("--active applies to Fabric. active-version must name a Fabric directory")
+    if args.yarn_patch and args.loader == "fabric":
+        die("--yarn-patch is only used by Forge and NeoForge")
+
+    fabric_present = version_directories("fabric")
+    if args.loader != "fabric":
+        if not fabric_present:
+            die("Add a Fabric version first: ./add-version fabric <mc>")
+        if read_active() not in fabric_present:
+            die(
+                "active-version must name one of the Fabric directories "
+                f"({', '.join(fabric_present)}). Run ./add-version fabric <mc> --active."
+            )
+    elif not read_active():
+        args.active = True
+
+    destination = ROOT / args.loader / "versions" / args.mc
+    properties_file = destination / "gradle.properties"
+    if properties_file.exists() and not args.dry_run:
+        die(f"{properties_file.relative_to(ROOT)} already exists")
+
+    java = java_major(args.mc)
+    if java >= 25:
+        die(
+            f"Minecraft {args.mc} needs Java {java}. This template leaves that toolchain out: "
+            "26.x is unobfuscated and needs its own buildscript. See AGENTS.md."
+        )
+
+    yarn = yarn_version(args.mc)
+    values: dict[str, str] = {}
+    if args.loader == "fabric":
+        loader = loader_version(args.mc)
+        values = {
+            "mod.mc_compat": args.mc,
+            "deps.yarn_mappings": yarn,
+            "deps.fabric_loader": loader,
+            "deps.fabric_loader_min": loader,
+            "deps.fabric_api": fabric_api_version(args.mc),
+            "deps.java_min": str(java),
+        }
+    elif args.loader == "forge":
+        values = {
+            "loom.platform": "forge",
+            "mod.mc_compat": args.mc,
+            "deps.yarn_mappings": yarn,
+            "deps.yarn_patch_forge": yarn_patch("yarn-mappings-patch-forge", args.mc, args.yarn_patch),
+            "deps.forge": forge_version(args.mc),
+            "deps.java_min": str(java),
+        }
+    else:
+        values = {
+            "loom.platform": "neoforge",
+            "mod.mc_compat": args.mc,
+            "deps.yarn_mappings": yarn,
+            "deps.yarn_patch_neoforge": yarn_patch(
+                "yarn-mappings-patch-neoforge", args.mc, args.yarn_patch
+            ),
+            "deps.neoforge": neoforge_version(args.mc),
+            "deps.java_min": str(java),
+        }
+
+    if args.dry_run:
+        print("dry run, nothing written")
+    write_properties(properties_file, values, args.dry_run)
+    if args.loader != "fabric":
+        copy_entrypoints(args.loader, destination, mod_group(), args.dry_run)
+        print(
+            "Entrypoints were copied from templates/. "
+            "If this loader version moved its mod constructor, edit those files before building."
+        )
+
+    if args.active:
+        active_file = ROOT / "active-version"
+        print(f"{active_file.relative_to(ROOT)} -> {args.mc}")
+        if not args.dry_run:
+            active_file.write_text(args.mc + "\n")
+        print("The next Fabric Gradle run edits core/ with this version's Yarn names.")
+    elif args.loader == "fabric" and read_active() != args.mc:
+        print(
+            f"core/ stays on the Yarn names of {read_active() or 'active-version'}. "
+            "Pass --active to switch the version you edit."
+        )
+
+    print()
+    print(f"./gradlew -Pmod.loaders={args.loader} :{args.loader}:{args.mc}:build")
+    print(f"./gradlew -Pmod.loaders={args.loader} :{args.loader}:{args.mc}:runClient")
+
+
+if __name__ == "__main__":
+    main()

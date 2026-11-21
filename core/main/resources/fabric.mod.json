@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "craft-autocomplete",
+  "version": "${version}",
+  "name": "Craft Autocomplete",
+  "description": "Craft Autocomplete.",
+  "authors": ["ijustseen"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.ijustseen.craftautocomplete.FabricEntrypoint"]
+  },
+  "depends": {
+    "fabricloader": ">=${fabric_loader_min}",
+    "minecraft": "${minecraft}",
+    "java": ">=${java_min}",
+    "fabric-api": "*"
+  }
+}
