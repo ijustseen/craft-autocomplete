@@ -1,0 +1,8 @@
+accessWidener v2 official
+
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen leftPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen topPos I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageWidth I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractContainerScreen imageHeight I
+accessible field net/minecraft/client/gui/screens/inventory/AbstractRecipeBookScreen recipeBookComponent Lnet/minecraft/client/gui/screens/recipebook/RecipeBookComponent;
+accessible field net/minecraft/client/gui/screens/inventory/AbstractRecipeBookScreen widthTooNarrow Z

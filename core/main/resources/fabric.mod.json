@@ -3,10 +3,17 @@
   "id": "craft-autocomplete",
   "version": "${version}",
   "name": "Craft Autocomplete",
-  "description": "Craft Autocomplete.",
+  "description": "Подсказывает следующий крафт в верстаке, инвентаре и печах и ставит его по Tab.",
   "authors": ["ijustseen"],
   "license": "MIT",
+  "icon": "assets/craft-autocomplete/icon.png",
   "environment": "client",
+  "custom": {
+    "modmenu": {
+      "badges": ["client"]
+    }
+  },
+  "accessWidener": "craft-autocomplete.accesswidener",
   "entrypoints": {
     "client": ["dev.ijustseen.craftautocomplete.FabricEntrypoint"]
   },

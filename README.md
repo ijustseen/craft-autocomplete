@@ -1,58 +1,38 @@
 # Craft Autocomplete
 
-A client-side mod for Fabric, Forge and NeoForge, across several Minecraft versions. Shared code lives in `core/` and is written once, in Yarn names. Each version is a [Stonecutter](https://stonecutter.kikugie.dev/) `0.9.8` branch: a difference is either a string replacement or a file under `versions/{mc}/src` that overrides the shared one.
+A client-side mod. Open a crafting table and it shows the one recipe that makes the most sense right now. The ingredients sit in the grid as faint items. Tab places them, like autocomplete in an editor.
 
-The mod starts with no Minecraft version. A version is a directory `{loader}/versions/<mc>` with a `gradle.properties` file, and Gradle registers every such directory. `active-version` appears when the first Fabric version is added and names the Yarn names `core/` is written in.
+It works on a vanilla server. The recipe book moves the items; the mod only chooses what to suggest. Recipes outside the book are never offered.
 
-Finished jars land in `build/libs/<mod.version>/{fabric,forge,neoforge}/`. `<mod.version>` comes from `gradle.properties` and is `0.1.0` right now.
+## Where it works
 
-Fabric Loom and Architectury Loom break each other's remap when they share a Gradle process, so each loader is built in its own run. `buildAndCollectAll` starts those three runs itself. Pass tasks for different loaders to different `./gradlew` invocations, and set `-Pmod.loaders` to the loader you are building or launching. The rules that keep the layout intact are in `AGENTS.md`.
+- The 3×3 crafting table
+- The 2×2 grid in your inventory
+- Furnace, blast furnace, and smoker. Each uses its own recipes. If the fuel slot is empty, the mod shows fuel and places it with Tab: coal first, then logs and planks
 
-Licensed under the [MIT License](LICENSE). The project layout comes from the multi-loader mod template.
+## How to use it
 
-## Add a version
+- **Tab** places the ingredients for one craft. In a furnace it also places enough fuel for that amount.
+- **Shift+Tab** places as many as will fit.
+- **`[`** and **`]`** cycle the next suggestions. There is no list on screen.
+- When the grid is already filled, the next Tab adds one more item to every slot.
+- Hover the faint result for the usual item tooltip. A Tab icon sits under the result slot.
 
-```bash
-./add-version fabric 1.21.4
-./add-version fabric 1.21.4 --active
-./add-version forge 1.21.1
-./add-version neoforge 1.21.1
-```
+On an empty grid the mod looks at your inventory and what you just picked up. It starts with a tool, weapon, or armor piece you lack or only have a worse version of. If you have no furnace but you are carrying ore, it suggests a furnace. When your hunger has dropped, food comes first in a smoker or furnace. The item you just took off the table stays first for a few seconds, so you can craft a stack of them.
 
-`<loader>` is `fabric`, `forge` or `neoforge`. The command looks up Yarn, Fabric Loader, Fabric API, Forge or NeoForge, and the Java level. The first Fabric version becomes `active-version`. Later Fabric versions stay side by side until you pass `--active`. Forge and NeoForge need that Fabric version already, and their entrypoints are copied from `templates/`. If Architectury has no Yarn patch for that Minecraft version, pass `--yarn-patch <version>`. Minecraft 26.1 and newer, including 26.3, are added on Fabric. They use Java 25 and official names. Forge and NeoForge stay on Yarn versions.
+If you start placing a recipe yourself, the suggestion switches to it and fills the empty slots. An item on your cursor counts too.
 
-## Commands
+## Requirements
 
-### Build every loader
+- Minecraft 26.3
+- Fabric Loader 0.20.1 or newer
+- Fabric API
+- Java 25
 
-```bash
-./gradlew buildAndCollectAll
-```
+The mod is client-side. It does not need to be installed on the server.
 
-### Build one loader
+This is alpha 0.1.0, and only Fabric 26.3 for now. It does not look at the world around you, and it does not suggest the anvil, stonecutter, or brewing stand.
 
-```bash
-./gradlew buildAndCollectFabric
-./gradlew buildAndCollectForge
-./gradlew buildAndCollectNeoForge
-```
+## License
 
-### Build or run one version
-
-`<mc>` is the directory name under `{loader}/versions/`.
-
-```bash
-./gradlew -Pmod.loaders=<loader> :<loader>:<mc>:build
-./gradlew -Pmod.loaders=<loader> :<loader>:<mc>:runClient
-```
-
-After `./add-version fabric 1.21.4`:
-
-```bash
-./gradlew -Pmod.loaders=fabric :fabric:1.21.4:build
-./gradlew -Pmod.loaders=fabric :fabric:1.21.4:runClient
-```
-
-`build` writes the jar into that version's own `build/libs/`. The `buildAndCollect*` tasks also copy jars into `build/libs/<mod.version>/{fabric,forge,neoforge}/`.
-
-Game directories are `run/` for Fabric, `run-forge/` for Forge and `run-neoforge/` for NeoForge. They are gitignored.
+[MIT](LICENSE)

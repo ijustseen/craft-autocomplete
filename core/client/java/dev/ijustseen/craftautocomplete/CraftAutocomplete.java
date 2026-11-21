@@ -1,6 +1,14 @@
 package dev.ijustseen.craftautocomplete;
 
+import dev.ijustseen.craftautocomplete.index.CraftIndex;
+import dev.ijustseen.craftautocomplete.recent.RecentItems;
+import dev.ijustseen.craftautocomplete.ui.CraftKeys;
+import dev.ijustseen.craftautocomplete.ui.StationView;
+import dev.ijustseen.craftautocomplete.ui.SuggestionController;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.AbstractRecipeBookScreen;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,5 +35,17 @@ public final class CraftAutocomplete {
         //? if neoforge
         //String loader = "neoforge";
         LOGGER.info("Craft Autocomplete ready on {} (in world: {})", loader, client.level != null);
+
+        RecentItems recentItems = new RecentItems();
+        CraftIndex index = new CraftIndex();
+        SuggestionController suggestions = new SuggestionController(recentItems, index);
+        // Touch the key bindings so they register during client init, before options are built.
+        CraftKeys.ACCEPT.getName();
+        ClientTickEvents.END_CLIENT_TICK.register(suggestions::onEndTick);
+        ScreenEvents.AFTER_INIT.register((minecraft, screen, scaledWidth, scaledHeight) -> {
+            if (StationView.of(screen) != null) {
+                suggestions.onScreenInit((AbstractRecipeBookScreen<?>) screen);
+            }
+        });
     }
 }

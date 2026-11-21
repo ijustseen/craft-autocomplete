@@ -23,6 +23,7 @@ dependencies {
 loom {
     enableModProvidedJavadoc = false
     splitEnvironmentSourceSets()
+    accessWidenerPath = rootProject.file("core/main/resources/craft-autocomplete.accesswidener")
 
     mods {
         create(modProp("mod.id")) {
