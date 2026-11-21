@@ -18,16 +18,14 @@ stonecutter parameters {
         match(loader, "fabric", "neoforge", "forge")
     }
 
-    // Mechanical renames between versions. Shared code is written with Yarn names.
-    // Add a replacement here when the new name is the same call. Different logic
-    // goes in an override file at {loader}/versions/{mc}/src.
-    //
-    // Minecraft 26.x (unobfuscated names, Java 25) is left out of this template.
-    // To add that branch, create a separate buildscript and a block like:
-    //   string(eval(current.version, ">= 26.1")) {
-    //       replace("net.minecraft.client.MinecraftClient", "net.minecraft.client.Minecraft")
-    //       replace("MinecraftClient", "Minecraft")
-    //   }
+    // Mechanical renames between versions. Shared code is written in the names of the
+    // active version. 26.1 and newer use Mojang's official names. Older versions are Yarn,
+    // so those builds translate the official names back.
     replacements {
+        string(eval(current.version, "< 26.1")) {
+            replace("net.minecraft.client.Minecraft", "net.minecraft.client.MinecraftClient")
+            replace("Minecraft.getInstance()", "MinecraftClient.getInstance()")
+            replace("client.level", "client.world")
+        }
     }
 }

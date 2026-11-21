@@ -73,8 +73,13 @@ if (anyVersions) stonecutter {
         if (wantFabric && fabricVersions.isNotEmpty()) {
             branch("fabric") {
                 for (mc in fabricVersions) {
-                    // Java comes from this version's deps.java_min, so a separate buildscript is unnecessary.
-                    version(mc).buildscript("build-fabric.gradle.kts")
+                    // 26.1 and newer ship unobfuscated and use a Loom build that does not remap.
+                    val buildscript = if (sc.eval(mc, ">= 26.1")) {
+                        "build-fabric-unobfuscated.gradle.kts"
+                    } else {
+                        "build-fabric.gradle.kts"
+                    }
+                    version(mc).buildscript(buildscript)
                 }
             }
         } else if (needsFabricAnchor) {

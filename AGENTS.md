@@ -42,7 +42,7 @@ Gradle discovers versions by scanning `{loader}/versions/*/gradle.properties`. T
 
 The repository starts with no version directories. The command writes `gradle.properties` from Fabric Meta, Mojang, Maven and the Forge promotion feed. The first Fabric version writes `active-version`. `--active` points that file at a later Fabric directory. Forge and NeoForge require a Fabric version already and copy their entrypoint stubs from `templates/`. If Architectury has not published a Yarn patch for that Minecraft version, pass `--yarn-patch`.
 
-A version with a different toolchain (for example 26.x on Java 25) gets its own buildscript. Leave the shared one unchanged. 26.x is also unobfuscated, so shared code reaches it only through replacements, and there are many of them. `./add-version` refuses Java 25 and newer.
+Minecraft 26.1 and newer are unobfuscated and need Java 25. `./add-version fabric 26.3` writes the version and Gradle selects `build-fabric-unobfuscated.gradle.kts`. Shared code is written in the active version's names. Builds older than 26.1 translate `Minecraft` and `client.level` back to Yarn in `stonecutter.gradle.kts`. Forge and NeoForge still use Yarn, so `./add-version` refuses 26.x for those loaders.
 
 ## Names and metadata
 

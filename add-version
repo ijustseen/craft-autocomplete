@@ -261,25 +261,31 @@ def main() -> None:
         die(f"{properties_file.relative_to(ROOT)} already exists")
 
     java = java_major(args.mc)
-    if java >= 25:
+    unobfuscated = java >= 25
+    if unobfuscated and args.loader != "fabric":
         die(
-            f"Minecraft {args.mc} needs Java {java}. This template leaves that toolchain out: "
-            "26.x is unobfuscated and needs its own buildscript. See AGENTS.md."
+            f"Minecraft {args.mc} needs Java {java} and is unobfuscated. "
+            "Add it with ./add-version fabric {args.mc}. Forge and NeoForge in this mod still use Yarn."
         )
 
-    yarn = yarn_version(args.mc)
     values: dict[str, str] = {}
     if args.loader == "fabric":
         loader = loader_version(args.mc)
         values = {
-            "mod.mc_compat": args.mc,
-            "deps.yarn_mappings": yarn,
+            "mod.mc_compat": f">={args.mc}" if unobfuscated else args.mc,
             "deps.fabric_loader": loader,
             "deps.fabric_loader_min": loader,
             "deps.fabric_api": fabric_api_version(args.mc),
             "deps.java_min": str(java),
         }
+        if not unobfuscated:
+            values = {
+                "mod.mc_compat": values["mod.mc_compat"],
+                "deps.yarn_mappings": yarn_version(args.mc),
+                **{key: values[key] for key in values if key != "mod.mc_compat"},
+            }
     elif args.loader == "forge":
+        yarn = yarn_version(args.mc)
         values = {
             "loom.platform": "forge",
             "mod.mc_compat": args.mc,
@@ -289,6 +295,7 @@ def main() -> None:
             "deps.java_min": str(java),
         }
     else:
+        yarn = yarn_version(args.mc)
         values = {
             "loom.platform": "neoforge",
             "mod.mc_compat": args.mc,
@@ -315,10 +322,11 @@ def main() -> None:
         print(f"{active_file.relative_to(ROOT)} -> {args.mc}")
         if not args.dry_run:
             active_file.write_text(args.mc + "\n")
-        print("The next Fabric Gradle run edits core/ with this version's Yarn names.")
+        names = "official names" if unobfuscated else "Yarn names"
+        print(f"The next Fabric Gradle run edits core/ with this version's {names}.")
     elif args.loader == "fabric" and read_active() != args.mc:
         print(
-            f"core/ stays on the Yarn names of {read_active() or 'active-version'}. "
+            f"core/ stays on the names of {read_active() or 'active-version'}. "
             "Pass --active to switch the version you edit."
         )
 

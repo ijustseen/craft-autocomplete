@@ -19,7 +19,7 @@ Licensed under the [MIT License](LICENSE). The project layout comes from the mul
 ./add-version neoforge 1.21.1
 ```
 
-`<loader>` is `fabric`, `forge` or `neoforge`. The command looks up Yarn, Fabric Loader, Fabric API, Forge or NeoForge, and the Java level. The first Fabric version becomes `active-version`. Later Fabric versions stay side by side until you pass `--active`. Forge and NeoForge need that Fabric version already, and their entrypoints are copied from `templates/`. If Architectury has no Yarn patch for that Minecraft version, pass `--yarn-patch <version>`. Java 25 and newer, including Minecraft 26.x, is refused.
+`<loader>` is `fabric`, `forge` or `neoforge`. The command looks up Yarn, Fabric Loader, Fabric API, Forge or NeoForge, and the Java level. The first Fabric version becomes `active-version`. Later Fabric versions stay side by side until you pass `--active`. Forge and NeoForge need that Fabric version already, and their entrypoints are copied from `templates/`. If Architectury has no Yarn patch for that Minecraft version, pass `--yarn-patch <version>`. Minecraft 26.1 and newer, including 26.3, are added on Fabric. They use Java 25 and official names. Forge and NeoForge stay on Yarn versions.
 
 ## Commands
 
