@@ -29,6 +29,11 @@ public final class SuggestionRanker {
         REPEAT,
         /** No furnace, and the player holds something that smelts into a gear material. */
         SMELTER,
+        /**
+         * A recipe the server never sent in the book, almost always from a mod, and the player
+         * does not own the result yet. It outranks gear made from the same materials.
+         */
+        OFF_BOOK,
         /** Gear of a kind the player lacks, or better than what they hold. One per kind. */
         GEAR_GAP,
         /** Furnace, chest, torch or bed the player does not own. */
@@ -157,12 +162,15 @@ public final class SuggestionRanker {
         if (facts.smelter() && owned == 0 && context.smeltNeed()) {
             return Tier.SMELTER;
         }
+        if (facts.essential() && owned == 0) {
+            return Tier.ESSENTIAL;
+        }
         if (facts.gearKind() != null
                 && facts.quality() > context.bestQuality().getOrDefault(facts.gearKind(), 0)) {
             return Tier.GEAR_GAP;
         }
-        if (facts.essential() && owned == 0) {
-            return Tier.ESSENTIAL;
+        if (facts.offBook() && owned == 0 && !facts.bulkCompression()) {
+            return Tier.OFF_BOOK;
         }
         if (facts.food()) {
             return context.hungry() ? Tier.HUNGRY_FOOD : Tier.FOOD;

@@ -14,6 +14,7 @@ package dev.ijustseen.craftautocomplete.rank;
  * @param smelter the output is a furnace
  * @param food the output is edible
  * @param feedsUseful how many gear or essential recipes take the output as an ingredient
+ * @param offBook the local world has this recipe and the server never put it in the recipe book
  */
 public record RecipeFacts(
         int displayId,
@@ -32,5 +33,6 @@ public record RecipeFacts(
         boolean smelter,
         boolean food,
         int outputMaxStack,
-        int feedsUseful
+        int feedsUseful,
+        boolean offBook
 ) {}

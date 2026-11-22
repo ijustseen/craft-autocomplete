@@ -40,10 +40,10 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Shows one ghost recipe on a crafting table, the 2x2 inventory grid or a furnace, and places it
- * through the vanilla recipe packet. With items already in the grid it suggests a recipe that
- * contains them; Tab on a finished grid sends the same recipe again, which vanilla answers with
- * one more of every ingredient.
+ * Shows one ghost recipe on a crafting table, the 2x2 inventory grid or a furnace. A recipe the
+ * server put in the book is placed with the vanilla packet. A recipe only the local world knows
+ * about is placed by moving items into the slots. With items already in the grid it suggests a
+ * recipe that contains them; Tab on a finished grid adds one more of every ingredient.
  */
 public final class SuggestionController {
     private static final int HIDE_AFTER_PLACE_TICKS = 10;
@@ -63,9 +63,12 @@ public final class SuggestionController {
     private int[] lastGrid = new int[0];
     private long lastSecond = Long.MIN_VALUE;
     private int hideTicks;
-    private int selectedDisplayId = -1;
+    private static final int NO_RECIPE = Integer.MIN_VALUE;
+
+    private int selectedDisplayId = NO_RECIPE;
     private int selectedIndex;
-    private int loggedWinnerId = Integer.MIN_VALUE;
+    private int loggedWinnerId = NO_RECIPE;
+    private boolean loggedWinner;
     private boolean acceptHeld;
     private boolean pinned;
     private List<GhostIcon> ghosts = List.of();
@@ -77,14 +80,15 @@ public final class SuggestionController {
     }
 
     public void onScreenInit(AbstractRecipeBookScreen<?> screen) {
-        selectedDisplayId = -1;
+        selectedDisplayId = NO_RECIPE;
         selectedIndex = 0;
         pinned = false;
         acceptHeld = false;
         hideTicks = 0;
         lastFingerprint = Long.MIN_VALUE;
         lastGrid = new int[0];
-        loggedWinnerId = Integer.MIN_VALUE;
+        loggedWinnerId = NO_RECIPE;
+        loggedWinner = false;
         ghosts = List.of();
         ranked = List.of();
         // Drawn after the GUI texture. Vanilla ghost slots paint a red fill; these do not.
@@ -183,7 +187,11 @@ public final class SuggestionController {
         int itemsToSmelt = view.fuel() == null ? 0 : itemsAfterPlace(view, craft, useMaxItems);
         // The server places only from the inventory, so the cursor stack has to go there first.
         stashCarried(client, menu);
-        client.gameMode.handlePlaceRecipe(menu.containerId, craft.entry().id(), useMaxItems);
+        if (craft.entry() != null) {
+            client.gameMode.handlePlaceRecipe(menu.containerId, craft.entry().id(), useMaxItems);
+        } else {
+            HandPlace.place(client, view, craft.facts(), useMaxItems);
+        }
         if (view.fuel() != null && !view.fuel().hasItem()) {
             Slot fuelSource = FurnaceFuel.choose(menu, craft.facts().ingredients()[0]);
             if (fuelSource != null) {
@@ -294,7 +302,7 @@ public final class SuggestionController {
         List<SuggestionRanker.Candidate> candidates = new ArrayList<>();
         for (IndexedCraft craft : pool) {
             GridMatch match = GridMatch.of(craft.facts(), grid, view.gridWidth(), view.gridHeight());
-            if (match == null || (partial && !craft.entry().canCraft(contents))) {
+            if (match == null || (partial && !craft.canCraft(contents))) {
                 continue;
             }
             crafts.add(craft);
@@ -317,10 +325,10 @@ public final class SuggestionController {
             next.add(new RankedCraft(crafts.get(scored.index()), candidates.get(scored.index()).match(), scored.score()));
         }
         ranked = next;
-        int keptId = pinned ? selectedDisplayId : -1;
+        int keptId = pinned ? selectedDisplayId : NO_RECIPE;
         selectedIndex = 0;
-        selectedDisplayId = ranked.isEmpty() ? -1 : ranked.get(0).craft().facts().displayId();
-        if (keptId >= 0) {
+        selectedDisplayId = ranked.isEmpty() ? NO_RECIPE : ranked.get(0).craft().facts().displayId();
+        if (keptId != NO_RECIPE) {
             for (int position = 0; position < ranked.size(); position++) {
                 if (ranked.get(position).craft().facts().displayId() == keptId) {
                     selectedIndex = position;
@@ -344,8 +352,7 @@ public final class SuggestionController {
         List<GhostIcon> icons = new ArrayList<>();
         Slot resultSlot = view.result();
         if (!resultSlot.hasItem()) {
-            ItemStack result = craft.craft().entry().display().result()
-                    .resolveForFirstStack(SlotDisplayContext.fromLevel(client.level));
+            ItemStack result = resultStack(craft.craft(), client);
             if (!result.isEmpty()) {
                 icons.add(new GhostIcon(resultSlot.x, resultSlot.y, result, true));
             }
@@ -367,6 +374,13 @@ public final class SuggestionController {
             }
         }
         return icons;
+    }
+
+    private static ItemStack resultStack(IndexedCraft craft, Minecraft client) {
+        if (craft.entry() == null) {
+            return new ItemStack(BuiltInRegistries.ITEM.byId(craft.facts().outputItem()));
+        }
+        return craft.entry().display().result().resolveForFirstStack(SlotDisplayContext.fromLevel(client.level));
     }
 
     /** Prefer the variant the player holds, so a tag does not show an item they lack. */
@@ -420,10 +434,11 @@ public final class SuggestionController {
     }
 
     private void logWinner(StationView view, RankedCraft winner) {
-        int id = winner == null ? -1 : winner.craft().facts().displayId();
-        if (id == loggedWinnerId) {
+        int id = winner == null ? NO_RECIPE : winner.craft().facts().displayId();
+        if (loggedWinner && id == loggedWinnerId) {
             return;
         }
+        loggedWinner = true;
         loggedWinnerId = id;
         if (winner == null) {
             CraftAutocomplete.LOGGER.info("suggestion {} none", view.station());

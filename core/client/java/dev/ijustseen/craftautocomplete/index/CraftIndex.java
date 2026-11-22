@@ -1,10 +1,13 @@
 package dev.ijustseen.craftautocomplete.index;
 
+import dev.ijustseen.craftautocomplete.CraftAutocomplete;
 import dev.ijustseen.craftautocomplete.rank.GearKind;
 import dev.ijustseen.craftautocomplete.rank.RecipeFacts;
 import net.minecraft.client.ClientRecipeBook;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.recipebook.RecipeCollection;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.util.context.ContextMap;
@@ -14,6 +17,10 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.Ingredient;
+import net.minecraft.world.item.crafting.Recipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.display.FurnaceRecipeDisplay;
 import net.minecraft.world.item.crafting.display.RecipeDisplay;
 import net.minecraft.world.item.crafting.display.RecipeDisplayEntry;
@@ -32,8 +39,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Per station: item id to the recipe-book entries that accept it, plus how many recipes mention the item.
- * Rebuilt when the client replaces its recipe-book collection list.
+ * Per station: item id to the recipes that accept it, plus how many recipes mention the item.
+ * The recipe book is the list the server agreed to place. Every other crafting and furnace recipe
+ * comes from the local world, or, on a remote server, from the mod jars installed on this client.
+ * Those are placed by slot clicks. Rebuilt when the book list or that recipe source is replaced.
  */
 public final class CraftIndex {
     public static final int CANDIDATE_LIMIT = 200;
@@ -44,14 +53,46 @@ public final class CraftIndex {
     /** Furnace inputs whose smelted output goes into a gear recipe: raw iron, not logs. */
     private final HashSet<Integer> smeltsIntoGear = new HashSet<>();
     private List<RecipeCollection> indexedCollections = List.of();
+    private Object indexedSource;
+    private RegistryAccess jarRegistries;
+    private List<RecipeHolder<?>> jarRecipes = List.of();
 
     public void rebuildIfNeeded(ClientRecipeBook book, ClientLevel level) {
         List<RecipeCollection> collections = book.getCollections();
-        if (collections == indexedCollections) {
+        Object source = recipeSource(level);
+        if (collections == indexedCollections && source == indexedSource) {
             return;
         }
-        rebuild(collections, SlotDisplayContext.fromLevel(level), level.enabledFeatures());
+        rebuild(collections, holdersFrom(level, source), SlotDisplayContext.fromLevel(level), level.enabledFeatures());
         indexedCollections = collections;
+        indexedSource = source;
+    }
+
+    /** Integrated server in a local world; the connection's registries on a remote server. */
+    private static Object recipeSource(ClientLevel level) {
+        RecipeManager manager = localRecipes();
+        return manager != null ? manager : level.registryAccess();
+    }
+
+    private List<RecipeHolder<?>> holdersFrom(ClientLevel level, Object source) {
+        if (source instanceof RecipeManager manager) {
+            return List.copyOf(manager.getRecipes());
+        }
+        RegistryAccess registries = level.registryAccess();
+        if (registries != jarRegistries) {
+            jarRecipes = JarRecipes.read(registries);
+            jarRegistries = registries;
+        }
+        return jarRecipes;
+    }
+
+    /** The integrated server of a local world, whose recipe manager holds every loaded mod recipe. */
+    private static RecipeManager localRecipes() {
+        Minecraft client = Minecraft.getInstance();
+        if (!client.hasSingleplayerServer()) {
+            return null;
+        }
+        return client.getSingleplayerServer().getRecipeManager();
     }
 
     public boolean needsSmelting(Map<Integer, Integer> inventory) {
@@ -119,18 +160,24 @@ public final class CraftIndex {
     public static List<IndexedCraft> keepCraftable(List<IndexedCraft> candidates, StackedItemContents contents) {
         List<IndexedCraft> alive = new ArrayList<>();
         for (IndexedCraft craft : candidates) {
-            if (craft.entry().canCraft(contents)) {
+            if (craft.canCraft(contents)) {
                 alive.add(craft);
             }
         }
         return alive;
     }
 
-    private void rebuild(List<RecipeCollection> collections, ContextMap context, FeatureFlagSet features) {
+    private void rebuild(
+            List<RecipeCollection> collections,
+            List<RecipeHolder<?>> holders,
+            ContextMap context,
+            FeatureFlagSet features
+    ) {
         stations.clear();
         smeltsIntoGear.clear();
         int airId = BuiltInRegistries.ITEM.getId(Items.AIR);
         HashSet<Integer> seenDisplays = new HashSet<>();
+        HashSet<Long> bookSignatures = new HashSet<>();
         List<Draft> drafts = new ArrayList<>();
         for (RecipeCollection collection : collections) {
             for (RecipeDisplayEntry entry : collection.getRecipes()) {
@@ -140,8 +187,20 @@ public final class CraftIndex {
                 Draft draft = draft(entry, context, features, airId);
                 if (draft != null) {
                     drafts.add(draft);
+                    bookSignatures.add(signature(draft));
                 }
             }
+        }
+        int offBook = 0;
+        for (RecipeHolder<?> holder : holders) {
+            Draft draft = draftWorld(holder, context, features, airId, bookSignatures, seenDisplays);
+            if (draft != null) {
+                drafts.add(draft);
+                offBook++;
+            }
+        }
+        if (offBook > 0) {
+            CraftAutocomplete.LOGGER.info("indexed {} recipes the book does not list", offBook);
         }
         Map<Integer, Integer> feeds = new HashMap<>();
         HashSet<Integer> gearMaterials = new HashSet<>();
@@ -163,12 +222,12 @@ public final class CraftIndex {
                 }
             }
             int feedsUseful = feeds.getOrDefault(draft.outputId, 0);
-            IndexedCraft craft = new IndexedCraft(draft.entry, draft.facts(feedsUseful));
+            IndexedCraft craft = new IndexedCraft(draft.entry, draft.facts(feedsUseful), draft.handRecipe);
             StationIndex index = stations.computeIfAbsent(draft.station, ignored -> new StationIndex());
             for (int itemId : mentioned(draft.ingredients)) {
                 index.byItem.computeIfAbsent(itemId, ignored -> new ArrayList<>()).add(craft);
             }
-            if (draft.gearKind != null || draft.essential || draft.food || feedsUseful > 0) {
+            if (draft.gearKind != null || draft.essential || draft.food || draft.offBook || feedsUseful > 0) {
                 index.useful.add(craft);
             }
         }
@@ -214,6 +273,154 @@ public final class CraftIndex {
             return null;
         }
         draft.station = station;
+        describeOutput(draft, result);
+        return draft;
+    }
+
+    /**
+     * A recipe loaded by the local world. Skipped when the book already lists the same grid,
+     * and when it is not a crafting or furnace recipe this mod can lay out.
+     */
+    private static Draft draftWorld(
+            RecipeHolder<?> holder,
+            ContextMap context,
+            FeatureFlagSet features,
+            int airId,
+            HashSet<Long> bookSignatures,
+            HashSet<Integer> seenDisplays
+    ) {
+        Recipe<?> recipe = holder.value();
+        if (recipe.isSpecial() || recipe.placementInfo().isImpossibleToPlace()) {
+            return null;
+        }
+        Station station = stationOf(recipe);
+        if (station == null || recipe.display().isEmpty()) {
+            return null;
+        }
+        RecipeDisplay display = recipe.display().getFirst();
+        if (!display.isEnabled(features)) {
+            return null;
+        }
+        ItemStack result = display.result().resolveForFirstStack(context);
+        if (result.isEmpty()) {
+            return null;
+        }
+        int outputId = BuiltInRegistries.ITEM.getId(result.getItem());
+        if (outputId == airId) {
+            return null;
+        }
+        Draft draft = fromDisplay(station, display, outputId, context, airId);
+        if (draft == null || bookSignatures.contains(signature(draft))) {
+            return null;
+        }
+        int displayId = localId(holder);
+        if (!seenDisplays.add(displayId)) {
+            return null;
+        }
+        draft.displayId = displayId;
+        draft.station = station;
+        draft.offBook = true;
+        draft.handRecipe = recipe;
+        describeOutput(draft, result);
+        return draft;
+    }
+
+    private static Station stationOf(Recipe<?> recipe) {
+        RecipeType<?> type = recipe.getType();
+        if (type == RecipeType.CRAFTING) {
+            return Station.CRAFTING;
+        }
+        if (type == RecipeType.SMELTING) {
+            return Station.FURNACE;
+        }
+        if (type == RecipeType.BLASTING) {
+            return Station.BLAST_FURNACE;
+        }
+        if (type == RecipeType.SMOKING) {
+            return Station.SMOKER;
+        }
+        return null;
+    }
+
+    /** The grid this mod can ghost and fill, read from the recipe's own display. */
+    private static Draft fromDisplay(
+            Station station,
+            RecipeDisplay display,
+            int outputId,
+            ContextMap context,
+            int airId
+    ) {
+        if (station == Station.CRAFTING && display instanceof ShapedCraftingRecipeDisplay shaped) {
+            List<SlotDisplay> slots = shaped.ingredients();
+            if (slots.size() != shaped.width() * shaped.height()) {
+                return null;
+            }
+            int[][] cells = new int[slots.size()][];
+            int filled = 0;
+            for (int index = 0; index < slots.size(); index++) {
+                cells[index] = itemIds(slots.get(index), context, airId);
+                if (cells[index].length > 0) {
+                    filled++;
+                }
+            }
+            if (filled == 0) {
+                return null;
+            }
+            int[][] ingredients = new int[filled][];
+            int cursor = 0;
+            for (int[] cell : cells) {
+                if (cell.length > 0) {
+                    ingredients[cursor++] = cell;
+                }
+            }
+            Draft draft = new Draft(null, outputId, ingredients);
+            draft.shaped = true;
+            draft.width = shaped.width();
+            draft.height = shaped.height();
+            draft.cells = cells;
+            markBulk(draft);
+            return draft;
+        }
+        if (station == Station.CRAFTING && display instanceof ShapelessCraftingRecipeDisplay shapeless) {
+            List<SlotDisplay> slots = shapeless.ingredients();
+            if (slots.isEmpty()) {
+                return null;
+            }
+            int[][] ingredients = new int[slots.size()][];
+            for (int index = 0; index < slots.size(); index++) {
+                ingredients[index] = itemIds(slots.get(index), context, airId);
+                if (ingredients[index].length == 0) {
+                    return null;
+                }
+            }
+            Draft draft = new Draft(null, outputId, ingredients);
+            draft.cells = ingredients;
+            markBulk(draft);
+            return draft;
+        }
+        if (station != Station.CRAFTING && display instanceof FurnaceRecipeDisplay furnace) {
+            int[] inputs = Arrays.stream(itemIds(furnace.ingredient(), context, airId))
+                    .filter(id -> !breaksGear(BuiltInRegistries.ITEM.byId(id)))
+                    .toArray();
+            if (inputs.length == 0) {
+                return null;
+            }
+            Draft draft = new Draft(null, outputId, new int[][]{inputs});
+            draft.cells = draft.ingredients;
+            return draft;
+        }
+        return null;
+    }
+
+    private static void markBulk(Draft draft) {
+        draft.bulk = sameIngredientNineTimes(draft.ingredients);
+        draft.bulkItem = draft.bulk && draft.ingredients[0].length == 1 ? draft.ingredients[0][0] : -1;
+        if (draft.bulkItem >= 0) {
+            draft.penaltyBelow = COMPRESSION_STACKS * BuiltInRegistries.ITEM.byId(draft.bulkItem).getDefaultMaxStackSize();
+        }
+    }
+
+    private static void describeOutput(Draft draft, ItemStack result) {
         Item output = result.getItem();
         draft.gearKind = ItemTraits.gearKind(output);
         draft.quality = draft.gearKind == null ? 0 : ItemTraits.quality(output);
@@ -221,7 +428,24 @@ public final class CraftIndex {
         draft.smelter = ItemTraits.smelter(output);
         draft.food = result.has(DataComponents.FOOD);
         draft.outputMaxStack = output.getDefaultMaxStackSize();
-        return draft;
+    }
+
+    private static long signature(Draft draft) {
+        long hash = draft.outputId;
+        hash = hash * 31 + (draft.shaped ? 1 : 0);
+        hash = hash * 31 + draft.width;
+        hash = hash * 31 + draft.height;
+        hash = hash * 31 + Arrays.deepHashCode(draft.cells);
+        return hash;
+    }
+
+    /** Negative, and never {@link Integer#MIN_VALUE}, which the controller uses for "nothing selected". */
+    private static int localId(RecipeHolder<?> holder) {
+        int hash = holder.id().identifier().hashCode();
+        if (hash == Integer.MIN_VALUE) {
+            return -2;
+        }
+        return hash < 0 ? hash : -hash - 1;
     }
 
     private static Draft craftingDraft(
@@ -357,6 +581,7 @@ public final class CraftIndex {
         final RecipeDisplayEntry entry;
         final int outputId;
         final int[][] ingredients;
+        int displayId = Integer.MIN_VALUE;
         Station station;
         boolean shaped;
         int width;
@@ -371,16 +596,21 @@ public final class CraftIndex {
         boolean smelter;
         boolean food;
         int outputMaxStack;
+        boolean offBook;
+        Recipe<?> handRecipe;
 
         Draft(RecipeDisplayEntry entry, int outputId, int[][] ingredients) {
             this.entry = entry;
             this.outputId = outputId;
             this.ingredients = ingredients;
+            if (entry != null) {
+                displayId = entry.id().index();
+            }
         }
 
         RecipeFacts facts(int feedsUseful) {
             return new RecipeFacts(
-                    entry.id().index(),
+                    displayId,
                     outputId,
                     ingredients,
                     shaped,
@@ -396,7 +626,8 @@ public final class CraftIndex {
                     smelter,
                     food,
                     outputMaxStack,
-                    feedsUseful
+                    feedsUseful,
+                    offBook
             );
         }
     }
