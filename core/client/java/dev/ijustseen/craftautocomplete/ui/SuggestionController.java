@@ -46,8 +46,6 @@ import java.util.Map;
  * one more of every ingredient.
  */
 public final class SuggestionController {
-    /** Same wash vanilla uses to fade a ghost item, without the red slot fill. */
-    private static final int GHOST_WASH = 0x30FFFFFF;
     private static final int HIDE_AFTER_PLACE_TICKS = 10;
     private static final int MAIN_INVENTORY_SLOTS = 36;
     /** Two drumsticks down: food then ranks above materials. */
@@ -389,11 +387,13 @@ public final class SuggestionController {
         }
         AbstractRecipeBookScreen<?> screen = view.screen();
         Minecraft client = Minecraft.getInstance();
+        GhostFade.beginFrame();
         for (GhostIcon icon : ghosts) {
             int x = screen.leftPos + icon.x();
             int y = screen.topPos + icon.y();
+            GhostFade.captureNext();
             graphics.fakeItem(icon.stack(), x, y);
-            graphics.fill(x, y, x + 16, y + 16, GHOST_WASH);
+            GhostFade.cancelCapture();
             if (!icon.result()) {
                 continue;
             }

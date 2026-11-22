@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.ijustseen.craftautocomplete.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "GuiRenderStateMixin",
+    "GuiRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

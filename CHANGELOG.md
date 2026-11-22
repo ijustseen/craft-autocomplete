@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1-alpha
+
+- Ghost items are more transparent, and the slot behind them is no longer tinted.
+
 ## 0.1.0-alpha
 
 First playable release. Client-side only, Fabric, Minecraft 26.3.

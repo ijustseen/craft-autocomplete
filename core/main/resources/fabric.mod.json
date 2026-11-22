@@ -14,6 +14,7 @@
     }
   },
   "accessWidener": "craft-autocomplete.accesswidener",
+  "mixins": ["craft-autocomplete.mixins.json"],
   "entrypoints": {
     "client": ["dev.ijustseen.craftautocomplete.FabricEntrypoint"]
   },
