@@ -1,5 +1,7 @@
 {
   "key.craft-autocomplete.accept": "Подставить крафт",
   "key.craft-autocomplete.previous": "Предыдущий крафт",
-  "key.craft-autocomplete.next": "Следующий крафт"
+  "key.craft-autocomplete.next": "Следующий крафт",
+  "chat.craft-autocomplete.welcome": "Craft Autocomplete сейчас в разработке и настройке. Чем дольше вы играете, тем лучше мод подстраивается под вас. Вы можете помочь разработке: отправьте свои веса на Discord-сервер %s. Файл создаётся командой /craftweights export.",
+  "chat.craft-autocomplete.exported": "Веса записаны в %s"
 }

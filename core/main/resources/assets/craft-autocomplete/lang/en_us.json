@@ -1,5 +1,7 @@
 {
   "key.craft-autocomplete.accept": "Accept Craft Suggestion",
   "key.craft-autocomplete.previous": "Previous Craft Suggestion",
-  "key.craft-autocomplete.next": "Next Craft Suggestion"
+  "key.craft-autocomplete.next": "Next Craft Suggestion",
+  "chat.craft-autocomplete.welcome": "Craft Autocomplete is still in development and being tuned. The longer you play, the better it adapts to you. You can help by sending your learned weights to the Discord server %s. Get the file with /craftweights export.",
+  "chat.craft-autocomplete.exported": "Learned weights written to %s"
 }

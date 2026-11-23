@@ -4,6 +4,9 @@ import dev.ijustseen.craftautocomplete.CraftAutocomplete;
 import dev.ijustseen.craftautocomplete.index.CraftIndex;
 import dev.ijustseen.craftautocomplete.index.IndexedCraft;
 import dev.ijustseen.craftautocomplete.index.ItemTraits;
+import dev.ijustseen.craftautocomplete.index.Station;
+import dev.ijustseen.craftautocomplete.learn.PlayerWeights;
+import dev.ijustseen.craftautocomplete.rank.CraftSignals;
 import dev.ijustseen.craftautocomplete.rank.GearKind;
 import dev.ijustseen.craftautocomplete.rank.GridMatch;
 import dev.ijustseen.craftautocomplete.rank.ScoreBreakdown;
@@ -20,10 +23,12 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractRecipeBookScreen;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.StackedItemContents;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.AbstractFurnaceMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
@@ -53,6 +58,7 @@ public final class SuggestionController {
 
     private final RecentItems recentItems;
     private final CraftIndex index;
+    private final PlayerWeights weights;
     private LocalPlayer trackedPlayer;
     private Map<Integer, Integer> previousTotals = Map.of();
     private Map<Integer, Integer> currentTotals = Map.of();
@@ -73,10 +79,24 @@ public final class SuggestionController {
     private boolean pinned;
     private List<GhostIcon> ghosts = List.of();
     private List<RankedCraft> ranked = List.of();
+    private String situation = "";
+    private String shownFamily = "";
+    private String placedSituation = "";
+    private String placedFamily = "";
+    private Station placedStation;
+    private int placedOutput = -1;
+    private boolean sawPlacedGrid;
+    private boolean cycled;
+    private boolean countResultAsAccept;
+    private boolean awaitingCraft;
+    /** The furnace menu has reported its contents, and one more refresh has seen that report. */
+    private boolean furnaceSawSync;
+    private boolean furnaceReady;
 
-    public SuggestionController(RecentItems recentItems, CraftIndex index) {
+    public SuggestionController(RecentItems recentItems, CraftIndex index, PlayerWeights weights) {
         this.recentItems = recentItems;
         this.index = index;
+        this.weights = weights;
     }
 
     public void onScreenInit(AbstractRecipeBookScreen<?> screen) {
@@ -84,6 +104,7 @@ public final class SuggestionController {
         selectedIndex = 0;
         pinned = false;
         acceptHeld = false;
+        cycled = false;
         hideTicks = 0;
         lastFingerprint = Long.MIN_VALUE;
         lastGrid = new int[0];
@@ -91,6 +112,8 @@ public final class SuggestionController {
         loggedWinner = false;
         ghosts = List.of();
         ranked = List.of();
+        furnaceSawSync = false;
+        furnaceReady = false;
         // Drawn after the GUI texture. Vanilla ghost slots paint a red fill; these do not.
         ScreenEvents.afterForeground(screen).register((current, graphics, mouseX, mouseY, tickProgress) ->
                 drawSuggestion(StationView.of(current), graphics, mouseX, mouseY));
@@ -115,6 +138,7 @@ public final class SuggestionController {
                 lastResultItem = -1;
                 lastCraftItem = -1;
                 lastCraftTime = 0L;
+                awaitingCraft = false;
             }
             return;
         }
@@ -126,6 +150,7 @@ public final class SuggestionController {
             lastCraftItem = -1;
             lastCraftTime = 0L;
             lastFingerprint = Long.MIN_VALUE;
+            awaitingCraft = false;
         }
         StationView view = StationView.of(client.gui.screen());
         // Grid and fuel items count as held, so moving them to and from the inventory is not a pickup.
@@ -137,6 +162,9 @@ public final class SuggestionController {
                 hideTicks--;
             }
         } else {
+            if (awaitingCraft) {
+                finishAbandonedCraft(totals);
+            }
             lastResultItem = -1;
         }
         recentItems.observe(totals, now);
@@ -202,6 +230,17 @@ public final class SuggestionController {
         selectedDisplayId = craft.facts().displayId();
         pinned = true;
         hideTicks = HIDE_AFTER_PLACE_TICKS;
+        placedSituation = situation;
+        placedFamily = shownFamily;
+        placedStation = view.station();
+        placedOutput = craft.facts().outputItem();
+        countResultAsAccept = !cycled;
+        if (cycled) {
+            weights.accept(situation, shownFamily);
+            cycled = false;
+        }
+        sawPlacedGrid = false;
+        awaitingCraft = true;
     }
 
     /** How many items the furnace input will hold once the server has placed the recipe. */
@@ -250,9 +289,15 @@ public final class SuggestionController {
     }
 
     private void cycle(StationView view, int direction) {
+        if (ranked.size() < 2) {
+            return;
+        }
+        weights.reject(situation, shownFamily);
+        cycled = true;
         selectedIndex = Math.floorMod(selectedIndex + direction, ranked.size());
         selectedDisplayId = ranked.get(selectedIndex).craft().facts().displayId();
         pinned = true;
+        rememberShown();
         ghosts = layout(view, ranked.get(selectedIndex));
     }
 
@@ -261,10 +306,24 @@ public final class SuggestionController {
             return;
         }
         index.rebuildIfNeeded(client.player.getRecipeBook(), client.level);
+        if (awaitingCraft && placedStation != view.station()) {
+            weights.reject(placedSituation, placedFamily);
+            awaitingCraft = false;
+        }
         int[] grid = gridItems(view);
+        if (awaitingCraft && !allEmpty(grid)) {
+            sawPlacedGrid = true;
+        } else if (awaitingCraft && sawPlacedGrid) {
+            weights.reject(placedSituation, placedFamily);
+            awaitingCraft = false;
+            sawPlacedGrid = false;
+        }
         int carried = itemId(view.menu().getCarried());
         int fuel = view.fuel() == null ? -1 : itemId(view.fuel().getItem());
+        furnaceReady = settleFurnace(view);
         long fingerprint = ((fingerprint(totals) * 31L + Arrays.hashCode(grid)) * 31L + carried) * 31L + fuel;
+        fingerprint = fingerprint * 31L + (furnaceReady ? 1 : 0);
+        fingerprint = fingerprint * 31L + (smelting(view) ? 1 : 0);
         long second = now / 1000L;
         if (!Arrays.equals(grid, lastGrid) && hideTicks == 0) {
             // The player changed the grid by hand: follow the new best guess, not an old pick.
@@ -284,6 +343,10 @@ public final class SuggestionController {
     }
 
     private void recompute(Minecraft client, StationView view, Map<Integer, Integer> totals, int[] grid, long now) {
+        if (!furnaceReady || smelting(view)) {
+            clearSuggestion(view);
+            return;
+        }
         AbstractContainerMenu menu = view.menu();
         StackedItemContents contents = new StackedItemContents();
         client.player.getInventory().fillStackedContents(contents);
@@ -308,17 +371,22 @@ public final class SuggestionController {
             crafts.add(craft);
             candidates.add(new SuggestionRanker.Candidate(craft.facts(), match));
         }
+        Map<GearKind, Integer> quality = bestQuality(totals);
+        boolean hungry = client.player.getFoodData().getFoodLevel() < HUNGRY_BELOW;
+        boolean smeltNeed = index.needsSmelting(totals);
+        situation = CraftSignals.situation(view.station().name(), hungry, smeltNeed, quality, partial);
         SuggestionRanker.Context context = new SuggestionRanker.Context(
                 totals,
                 recentItems.timestamps(now),
-                bestQuality(totals),
-                index.needsSmelting(totals),
-                client.player.getFoodData().getFoodLevel() < HUNGRY_BELOW,
+                quality,
+                smeltNeed,
+                hungry,
                 carried,
                 lastCraftItem,
                 lastCraftTime,
                 now,
-                partial
+                partial,
+                facts -> weights.evidence(situation, CraftSignals.family(facts, this::itemKey))
         );
         List<RankedCraft> next = new ArrayList<>();
         for (SuggestionRanker.Scored scored : SuggestionRanker.rank(candidates, context)) {
@@ -341,6 +409,7 @@ public final class SuggestionController {
             }
         }
         ghosts = ranked.isEmpty() ? List.of() : layout(view, ranked.get(selectedIndex));
+        rememberShown();
         logWinner(view, ranked.isEmpty() ? null : ranked.get(0));
     }
 
@@ -351,7 +420,7 @@ public final class SuggestionController {
         }
         List<GhostIcon> icons = new ArrayList<>();
         Slot resultSlot = view.result();
-        if (!resultSlot.hasItem()) {
+        if (showResultGhost(view)) {
             ItemStack result = resultStack(craft.craft(), client);
             if (!result.isEmpty()) {
                 icons.add(new GhostIcon(resultSlot.x, resultSlot.y, result, true));
@@ -403,6 +472,9 @@ public final class SuggestionController {
         Minecraft client = Minecraft.getInstance();
         GhostFade.beginFrame();
         for (GhostIcon icon : ghosts) {
+            if (icon.result() && !showResultGhost(view)) {
+                continue;
+            }
             int x = screen.leftPos + icon.x();
             int y = screen.topPos + icon.y();
             GhostFade.captureNext();
@@ -426,11 +498,79 @@ public final class SuggestionController {
     }
 
     private void noteResultTaken(StationView view, Map<Integer, Integer> totals, long now) {
-        if (lastResultItem >= 0 && count(totals, lastResultItem) > count(previousTotals, lastResultItem)) {
+        boolean grew = lastResultItem >= 0 && count(totals, lastResultItem) > count(previousTotals, lastResultItem);
+        if (grew) {
             lastCraftItem = lastResultItem;
             lastCraftTime = now;
+            if (awaitingCraft && lastResultItem == placedOutput) {
+                if (countResultAsAccept) {
+                    weights.accept(placedSituation, placedFamily);
+                }
+                awaitingCraft = false;
+            } else if (!awaitingCraft) {
+                String crafted = familyForOutput(lastResultItem);
+                weights.accept(situation, crafted);
+                if (!crafted.equals(shownFamily)) {
+                    weights.reject(situation, shownFamily);
+                }
+            } else {
+                awaitingCraft = false;
+            }
         }
         lastResultItem = itemId(view.result().getItem());
+    }
+
+    /** The screen closed before the result was taken. A grown output still counts as a craft. */
+    private void finishAbandonedCraft(Map<Integer, Integer> totals) {
+        boolean tookResult = placedOutput >= 0 && count(totals, placedOutput) > count(previousTotals, placedOutput);
+        if (tookResult) {
+            if (countResultAsAccept) {
+                weights.accept(placedSituation, placedFamily);
+            }
+        } else {
+            weights.reject(placedSituation, placedFamily);
+        }
+        awaitingCraft = false;
+    }
+
+    private void rememberShown() {
+        if (ranked.isEmpty()) {
+            shownFamily = "";
+            return;
+        }
+        shownFamily = CraftSignals.family(ranked.get(selectedIndex).craft().facts(), this::itemKey);
+    }
+
+    private String familyForOutput(int itemId) {
+        for (RankedCraft craft : ranked) {
+            if (craft.craft().facts().outputItem() == itemId) {
+                return CraftSignals.family(craft.craft().facts(), this::itemKey);
+            }
+        }
+        Item item = BuiltInRegistries.ITEM.byId(itemId);
+        if (ItemTraits.gearKind(item) != null) {
+            return "gear:" + ItemTraits.gearKind(item).name();
+        }
+        if (ItemTraits.essential(item)) {
+            return "essential:" + itemKey(itemId);
+        }
+        if (item.getDefaultInstance().has(DataComponents.FOOD)) {
+            return "food";
+        }
+        return "item:" + itemKey(itemId);
+    }
+
+    private String itemKey(int itemId) {
+        return BuiltInRegistries.ITEM.getKey(BuiltInRegistries.ITEM.byId(itemId)).toString();
+    }
+
+    private static boolean allEmpty(int[] grid) {
+        for (int id : grid) {
+            if (id >= 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void logWinner(StationView view, RankedCraft winner) {
@@ -447,7 +587,7 @@ public final class SuggestionController {
         ScoreBreakdown score = winner.score();
         Item item = BuiltInRegistries.ITEM.byId(winner.craft().facts().outputItem());
         CraftAutocomplete.LOGGER.info(
-                "suggestion {} {} id={} tier={} within={} recency={} fill={} legacy={} of={}",
+                "suggestion {} {} id={} tier={} within={} recency={} fill={} legacy={} evidence={} of={}",
                 view.station(),
                 BuiltInRegistries.ITEM.getKey(item),
                 id,
@@ -456,6 +596,7 @@ public final class SuggestionController {
                 format(score.recency()),
                 format(score.fill()),
                 format(score.legacy()),
+                format(score.evidence()),
                 ranked.size()
         );
     }
@@ -491,6 +632,63 @@ public final class SuggestionController {
             focused = inner;
         }
         return false;
+    }
+
+    private void clearSuggestion(StationView view) {
+        ranked = List.of();
+        selectedIndex = 0;
+        selectedDisplayId = NO_RECIPE;
+        pinned = false;
+        ghosts = List.of();
+        rememberShown();
+        logWinner(view, null);
+    }
+
+    /**
+     * The screen opens before the furnace packet arrives, so the first look is an empty cold
+     * furnace. Wait until the contents have been seen twice: the packet is in, including the
+     * burn timer that follows it.
+     */
+    private boolean settleFurnace(StationView view) {
+        if (!(view.menu() instanceof AbstractFurnaceMenu menu)) {
+            return true;
+        }
+        if (menu.getStateId() == 0) {
+            furnaceSawSync = false;
+            return false;
+        }
+        if (!furnaceSawSync) {
+            furnaceSawSync = true;
+            return false;
+        }
+        return true;
+    }
+
+    /** A lit furnace that still holds an ingredient is already cooking, so it gets no suggestion. */
+    private static boolean smelting(StationView view) {
+        if (!(view.menu() instanceof AbstractFurnaceMenu furnace) || !view.inputs().getFirst().hasItem()) {
+            return false;
+        }
+        return furnace.isLit() || furnace.getBurnProgress() > 0f;
+    }
+
+    /**
+     * The result ghost is only for an empty crafting grid. Once ingredients are placed, vanilla
+     * draws its own result in that slot, and a second translucent item sits on top of it.
+     */
+    private static boolean showResultGhost(StationView view) {
+        if (view.result().hasItem()) {
+            return false;
+        }
+        if (view.fuel() != null) {
+            return true;
+        }
+        for (Slot input : view.inputs()) {
+            if (input.hasItem()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int itemId(ItemStack stack) {

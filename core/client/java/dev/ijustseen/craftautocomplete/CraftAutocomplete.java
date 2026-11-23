@@ -1,12 +1,16 @@
 package dev.ijustseen.craftautocomplete;
 
 import dev.ijustseen.craftautocomplete.index.CraftIndex;
+import dev.ijustseen.craftautocomplete.learn.PlayerWeights;
 import dev.ijustseen.craftautocomplete.recent.RecentItems;
 import dev.ijustseen.craftautocomplete.ui.CraftKeys;
+import dev.ijustseen.craftautocomplete.ui.PlayNotice;
 import dev.ijustseen.craftautocomplete.ui.StationView;
 import dev.ijustseen.craftautocomplete.ui.SuggestionController;
+import dev.ijustseen.craftautocomplete.ui.WeightCommands;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractRecipeBookScreen;
 import org.slf4j.Logger;
@@ -38,7 +42,10 @@ public final class CraftAutocomplete {
 
         RecentItems recentItems = new RecentItems();
         CraftIndex index = new CraftIndex();
-        SuggestionController suggestions = new SuggestionController(recentItems, index);
+        PlayerWeights weights = PlayerWeights.load(FabricLoader.getInstance().getConfigDir());
+        SuggestionController suggestions = new SuggestionController(recentItems, index, weights);
+        WeightCommands.register(weights);
+        PlayNotice.register(weights);
         // Touch the key bindings so they register during client init, before options are built.
         CraftKeys.ACCEPT.getName();
         ClientTickEvents.END_CLIENT_TICK.register(suggestions::onEndTick);

@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.ToDoubleFunction;
 
 /**
  * Orders an already bounded set of craftable recipes as a ladder of tiers.
@@ -20,6 +21,11 @@ public final class SuggestionRanker {
     public static final int FRESH_OUTPUT = 40;
     public static final int OWNED = -30;
     public static final int COMPRESSION = -50;
+    /** How far apart neighbouring ladder rungs sit. Learned evidence has to clear this to pass one. */
+    public static final double TIER_STEP = 1.2d;
+    public static final double LEARNING_ALPHA = 1d;
+    /** One or two choices stay on the ladder. The third matching choice can move a rung. */
+    public static final int LEARNING_MIN_EVENTS = 3;
 
     /** Declaration order is the ladder, top first. */
     public enum Tier {
@@ -62,6 +68,7 @@ public final class SuggestionRanker {
      * @param hungry the hunger bar has dropped enough that food should come before materials
      * @param carriedItem item on the cursor, -1 when empty; it is what the player is about to place
      * @param partial the grid already holds items the player placed
+     * @param learning accept/reject evidence for a recipe's family in the current situation, else 0
      */
     public record Context(
             Map<Integer, Integer> inventory,
@@ -73,7 +80,8 @@ public final class SuggestionRanker {
             int lastCraftItem,
             long lastCraftTime,
             long nowMillis,
-            boolean partial
+            boolean partial,
+            ToDoubleFunction<RecipeFacts> learning
     ) {}
 
     public record Scored(int index, ScoreBreakdown score) {}
@@ -118,7 +126,7 @@ public final class SuggestionRanker {
         }
         List<Candidate> ordered = candidates;
         scored.sort(Comparator
-                .comparingInt((Scored entry) -> entry.score().tier().ordinal())
+                .comparingDouble((Scored entry) -> rankKey(entry.score())).reversed()
                 .thenComparing(Comparator.comparingDouble((Scored entry) -> entry.score().within()).reversed())
                 .thenComparingInt(entry -> ordered.get(entry.index()).facts().displayId()));
         List<Scored> remapped = new ArrayList<>(scored.size());
@@ -181,6 +189,21 @@ public final class SuggestionRanker {
         return Tier.OTHER;
     }
 
+    /**
+     * Log evidence from accept and reject counts. Below {@link #LEARNING_MIN_EVENTS} it is zero,
+     * so the ladder is unchanged until the same choice has been repeated.
+     */
+    public static double evidence(int accept, int reject) {
+        if (accept + reject < LEARNING_MIN_EVENTS) {
+            return 0d;
+        }
+        return Math.log((accept + LEARNING_ALPHA) / (reject + LEARNING_ALPHA));
+    }
+
+    private static double rankKey(ScoreBreakdown score) {
+        return -score.tier().ordinal() * TIER_STEP + score.evidence();
+    }
+
     private static ScoreBreakdown score(Candidate candidate, Tier tier, Context context) {
         RecipeFacts facts = candidate.facts();
         double recency = 0d;
@@ -201,7 +224,8 @@ public final class SuggestionRanker {
                 within += facts.gearKind().priority();
             }
         }
-        return new ScoreBreakdown(tier, within, recency, fill, legacy);
+        double learned = context.learning() == null ? 0d : context.learning().applyAsDouble(facts);
+        return new ScoreBreakdown(tier, within, recency, fill, legacy, learned);
     }
 
     /** Fallback order for filler: summed ingredient freshness, new output, already owned, compression. */
